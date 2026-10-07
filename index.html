@@ -322,8 +322,8 @@ store("cardflip.me", me);
 // ───────── 랭킹 저장소 ─────────
 // Supabase 주소와 공개 키(anon). 공개 키는 원래 페이지에 보여도 되는 값이고,
 // 무엇을 허락할지는 Supabase 쪽 표 규칙(src/supabase.sql)이 정한다.
-const SUPABASE_URL = "";
-const SUPABASE_KEY = "";
+const SUPABASE_URL = "https://ogsafbzfefctvnfvcqfp.supabase.co";
+const SUPABASE_KEY = "sb_publishable_WO52R0tC9CLffDB63vsEsw_be-RC7WC";
 
 const LocalRankStore = {
   async list() { return store("cardflip.records") || []; },
