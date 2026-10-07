@@ -167,13 +167,22 @@
   .board-wrap { flex: 1; width: 100%; display: grid; place-items: center; }
   .board { display: grid; gap: 10px; touch-action: manipulation; }
 
-  .card { aspect-ratio: 3 / 4; perspective: 800px; cursor: pointer; }
-  .card .inner { position: relative; width: 100%; height: 100%; transition: transform .3s cubic-bezier(.2, .8, .2, 1); transform-style: preserve-3d; }
+  .card { aspect-ratio: 3 / 4; perspective: 900px; cursor: pointer; --d: 0ms; }
+  .card .inner {
+    position: relative; width: 100%; height: 100%; transform-style: preserve-3d;
+    transform: rotateY(0deg); will-change: transform;
+    transition: transform .42s cubic-bezier(.3, .7, .25, 1) var(--d);
+  }
   .card.up .inner { transform: rotateY(180deg); }
-  .face { position: absolute; inset: 0; border-radius: 14px; backface-visibility: hidden; -webkit-backface-visibility: hidden; display: grid; place-items: center; overflow: hidden; }
-  .face.back { background: var(--indigo); box-shadow: 0 6px 14px -6px rgba(42, 37, 80, .6); }
+  /* 누르는 순간 살짝 눌리는 손맛 */
+  .card:active .inner { scale: .96; }
+  /* 판이 깔릴 때 한 장씩 떨어지듯 나타난다 */
+  .card.deal { animation: deal .38s cubic-bezier(.2, .9, .3, 1.15) var(--d) both; }
+  @keyframes deal { from { opacity: 0; transform: translateY(18px) scale(.86); } }
+  .face { position: absolute; inset: 0; border-radius: 14px; backface-visibility: hidden; -webkit-backface-visibility: hidden; transform: translateZ(0); display: grid; place-items: center; overflow: hidden; }
+  .face.back { background: var(--indigo); box-shadow: 0 4px 10px -5px rgba(42, 37, 80, .55); }
   .face.back img { width: 100%; height: 100%; object-fit: cover; }
-  .face.front { background: var(--panel); transform: rotateY(180deg); box-shadow: 0 6px 14px -6px rgba(29, 27, 47, .35); }
+  .face.front { background: var(--panel); transform: rotateY(180deg) translateZ(0); box-shadow: 0 4px 10px -5px rgba(29, 27, 47, .3); }
   .face.front img { width: 88%; height: 88%; object-fit: contain; }
   .card.matched .face.front { box-shadow: 0 0 0 3px var(--ok), 0 8px 18px -6px rgba(43, 182, 115, .6); }
   .card.matched { animation: pop .35s; }
@@ -182,8 +191,9 @@
   @keyframes shake { 25% { translate: -4px 0; } 75% { translate: 4px 0; } }
 
   /* ───────── 가운데 큰 글씨 ───────── */
-  #overlay { position: fixed; inset: 0; display: none; place-items: center; background: rgba(244, 239, 230, .86); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 10; text-align: center; }
-  #overlay.on { display: grid; }
+  #overlay { position: fixed; inset: 0; display: none; place-items: center; background: rgba(244, 239, 230, .94); z-index: 10; text-align: center; }
+  #overlay.on { display: grid; animation: fade .18s ease-out; }
+  @keyframes fade { from { opacity: 0; } }
   #overlay.dark { background: rgba(29, 27, 47, .92); color: #fff; }
   #overlay .kicker { font-size: 14px; font-weight: 800; letter-spacing: .2em; color: var(--muted); }
   #overlay.dark .kicker { color: #ffd77a; }
@@ -303,14 +313,19 @@ function store(key, value) {
 }
 
 const me = store("cardflip.me") || {
-  id: (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)),
+  id: crypto.randomUUID ? crypto.randomUUID()
+    : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ Math.random() * 16 >> c / 4).toString(16)),
   name: `${ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]} ${ANIMALS[Math.floor(Math.random() * ANIMALS.length)]}`,
 };
 store("cardflip.me", me);
 
 // ───────── 랭킹 저장소 ─────────
-// 지금은 이 기기(localStorage)에만 저장한다. 공용 저장소로 바꿀 때는 이 객체만 갈아끼운다.
-const RankStore = {
+// Supabase 주소와 공개 키(anon). 공개 키는 원래 페이지에 보여도 되는 값이고,
+// 무엇을 허락할지는 Supabase 쪽 표 규칙(src/supabase.sql)이 정한다.
+const SUPABASE_URL = "";
+const SUPABASE_KEY = "";
+
+const LocalRankStore = {
   async list() { return store("cardflip.records") || []; },
   async add(record) {
     const records = store("cardflip.records") || [];
@@ -318,6 +333,27 @@ const RankStore = {
     store("cardflip.records", records);
   },
 };
+
+const SupabaseRankStore = {
+  headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json" },
+  async list() {
+    // 빠른 순으로 넉넉히 받아 와서 플레이어별 최고 기록은 화면에서 고른다
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/scores?select=player_id,name,time&order=time.asc&limit=500`, { headers: this.headers });
+    if (!res.ok) throw new Error(`랭킹 불러오기 실패 ${res.status}`);
+    return (await res.json()).map(r => ({ id: r.player_id, name: r.name, time: Number(r.time) }));
+  },
+  async add({ id, name, time }) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/scores`, {
+      method: "POST",
+      headers: { ...this.headers, Prefer: "return=minimal" },
+      body: JSON.stringify({ player_id: id, name, time }),
+    });
+    if (!res.ok) throw new Error(`기록 저장 실패 ${res.status}`);
+  },
+};
+
+// 주소와 키를 넣기 전(로컬 개발)에는 이 기기에만 저장한다
+const RankStore = SUPABASE_URL && SUPABASE_KEY ? SupabaseRankStore : LocalRankStore;
 
 // 플레이어마다 가장 좋은 기록 하나만 남겨 빠른 순으로 줄 세운다
 function bestPerPlayer(records) {
@@ -330,7 +366,9 @@ function bestPerPlayer(records) {
 
 const TOP_N = 10;
 async function renderRank() {
-  const ranked = bestPerPlayer(await RankStore.list());
+  let records = [];
+  try { records = await RankStore.list(); } catch (e) { console.error(e); }
+  const ranked = bestPerPlayer(records);
   const myIndex = ranked.findIndex(r => r.id === me.id);
   const row = (r, i) => `<li class="${r.id === me.id ? "me" : ""}"><span class="pos">${i + 1}</span><span class="name">${escapeHtml(r.name)}</span><span class="t">${r.time.toFixed(2)}초</span></li>`;
   let html = ranked.slice(0, TOP_N).map(row).join("");
@@ -424,7 +462,34 @@ function layout() {
   $("board").style.gridTemplateColumns = `repeat(${c}, ${size}px)`;
 }
 
-function buildBoard() {
+// 그림은 처음 화면에 그릴 때 해석(decode)하느라 멈칫한다. 게임 전에 미리 해 둔다
+const imagesReady = Promise.all([CARD_BACK, ...FACES].map(src => {
+  const img = new Image();
+  img.src = src;
+  return img.decode().catch(() => {});
+}));
+
+const WAVE_STEP_MS = 28; // 이웃 카드끼리 뒤집히는 시간 차
+const FLIP_MS = 420;     // CSS 회전 시간과 같게
+
+// 왼쪽 위에서 오른쪽 아래로 물결이 지나가듯 카드마다 출발 시간을 준다. 가장 늦은 카드의 지연을 돌려준다
+function setWave() {
+  const cards = [...document.querySelectorAll(".card")];
+  const cols = getComputedStyle($("board")).gridTemplateColumns.split(" ").length;
+  let max = 0;
+  cards.forEach((c, i) => {
+    const d = (Math.floor(i / cols) + i % cols) * WAVE_STEP_MS;
+    c.style.setProperty("--d", `${d}ms`);
+    max = Math.max(max, d);
+  });
+  return max;
+}
+
+function clearWave() {
+  document.querySelectorAll(".card").forEach(c => c.style.removeProperty("--d"));
+}
+
+async function buildBoard() {
   const { cols, rows } = ROUNDS[roundIndex];
   const keys = shuffle(FACES.map((_, i) => i)).slice(0, cols * rows / 2);
   const deck = shuffle([...keys, ...keys]);
@@ -432,6 +497,10 @@ function buildBoard() {
       <div class="face back"><img src="${CARD_BACK}" alt="" draggable="false"></div>
       <div class="face front"><img src="${FACES[key]}" alt="" draggable="false"></div></div></div>`).join("");
   layout();
+  const lastDelay = setWave();
+  document.querySelectorAll(".card").forEach(c => c.classList.add("deal"));
+  await Promise.all([...$("board").querySelectorAll("img")].map(img => img.decode().catch(() => {})));
+  return lastDelay;
 }
 
 function setAll(up) {
@@ -447,17 +516,21 @@ async function playRound(run) {
   $("roundLabel").textContent = `${roundIndex + 1} / ${ROUNDS.length}`;
   $("totalLabel").textContent = totalUsed.toFixed(2);
   renderTime(limit, limit);
-  buildBoard();
+  await imagesReady;
+  const wave = await buildBoard();
 
-  // 뒷면 → 앞면(라운드마다 0.2초씩 길게) → 다시 뒷면, 그 뒤부터 시간을 센다
+  // 뒷면 → 앞면(라운드마다 0.2초씩 길게) → 다시 뒷면, 그 뒤부터 시간을 센다.
+  // 카드마다 같은 시간 차로 올라가고 내려가므로 모든 카드의 앞면이 같은 시간만큼 보인다
   await sleep(BACK_MS);
   if (run !== runId) return;
+  document.querySelectorAll(".card").forEach(c => c.classList.remove("deal"));
   setAll(true);
-  await sleep(FRONT_MS + FRONT_STEP_MS * roundIndex);
+  await sleep(FLIP_MS + FRONT_MS + FRONT_STEP_MS * roundIndex);
   if (run !== runId) return;
   setAll(false);
-  await sleep(300);
+  await sleep(wave + FLIP_MS);
   if (run !== runId) return;
+  clearWave(); // 직접 고를 때는 바로 뒤집혀야 한다
 
   deadline = performance.now() + limit * 1000;
   locked = false;
@@ -553,8 +626,15 @@ async function finish(cleared) {
   $("resultTitle").textContent = "5라운드 클리어!";
   $("resultScore").textContent = `${totalUsed.toFixed(2)}초`;
   $("resultText").textContent = "기록 저장 중…";
-  const before = bestPerPlayer(await RankStore.list()).find(r => r.id === me.id);
-  await RankStore.add({ id: me.id, name: me.name, time: totalUsed, at: Date.now() });
+  let before;
+  try {
+    before = bestPerPlayer(await RankStore.list()).find(r => r.id === me.id);
+    await RankStore.add({ id: me.id, name: me.name, time: totalUsed });
+  } catch (e) {
+    console.error(e);
+    $("resultText").textContent = "기록을 저장하지 못했어요. 인터넷 연결을 확인해 주세요.";
+    return;
+  }
   const { ranked, myIndex } = await renderRank();
   const isBest = !before || totalUsed < before.time;
   $("resultText").innerHTML = `<b>${escapeHtml(me.name)}</b>님은 지금 <b>${myIndex + 1}위</b> / ${ranked.length}명` +
